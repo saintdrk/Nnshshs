@@ -1,0 +1,1163 @@
+-- Silent Aim for M40 + Soviet Hub UI
+-- 3 Buttons: Normal (single fire), Loop Kill (continuous), On/Off toggle
+
+--// SERVICES
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+--// SPECIAL USER
+local specialUser = "man_idk312"
+
+--// DEVICE DETECTION
+local autoMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local isMobile = autoMobile
+local modeChosen = false
+
+if player.Name == specialUser then
+	isMobile = nil
+end
+
+--// THEME
+local Theme = {
+	Background = Color3.fromRGB(35, 5, 5),
+	BackgroundLight = Color3.fromRGB(55, 12, 12),
+	Header = Color3.fromRGB(180, 20, 20),
+	HeaderDark = Color3.fromRGB(140, 15, 15),
+	Panel = Color3.fromRGB(70, 10, 10),
+	PanelLight = Color3.fromRGB(90, 15, 15),
+	Gold = Color3.fromRGB(215, 175, 60),
+	GoldDark = Color3.fromRGB(180, 140, 40),
+	GoldLight = Color3.fromRGB(245, 205, 90),
+	Text = Color3.fromRGB(245, 225, 160),
+	TextDim = Color3.fromRGB(200, 180, 130),
+	Green = Color3.fromRGB(70, 220, 120),
+	GreenDark = Color3.fromRGB(50, 180, 90),
+	Red = Color3.fromRGB(220, 70, 70),
+	RedLight = Color3.fromRGB(255, 100, 100),
+	Blue = Color3.fromRGB(70, 130, 220),
+	BlueDark = Color3.fromRGB(50, 100, 180),
+	Orange = Color3.fromRGB(220, 150, 50),
+	OrangeDark = Color3.fromRGB(180, 120, 30),
+	Rainbow = {
+		Color3.fromRGB(255, 0, 0),
+		Color3.fromRGB(255, 127, 0),
+		Color3.fromRGB(255, 255, 0),
+		Color3.fromRGB(0, 255, 0),
+		Color3.fromRGB(0, 0, 255),
+		Color3.fromRGB(75, 0, 130),
+		Color3.fromRGB(148, 0, 211)
+	}
+}
+
+--// UTILITY FUNCTIONS
+local function createCorner(parent, radius)
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, radius or 8)
+	corner.Parent = parent
+	return corner
+end
+
+local function createStroke(parent, color, thickness)
+	local stroke = Instance.new("UIStroke")
+	stroke.Parent = parent
+	stroke.Color = color or Theme.Gold
+	stroke.Thickness = thickness or 2
+	return stroke
+end
+
+local function tweenColor(obj, property, color, duration)
+	local props = {}
+	props[property] = color
+	TweenService:Create(obj, TweenInfo.new(duration or 0.2, Enum.EasingStyle.Quad), props):Play()
+end
+
+local function tweenSize(obj, size, duration, style)
+	TweenService:Create(obj, TweenInfo.new(duration or 0.3, style or Enum.EasingStyle.Back), {
+		Size = size
+	}):Play()
+end
+
+local function tweenPosition(obj, position, duration, style)
+	TweenService:Create(obj, TweenInfo.new(duration or 0.3, style or Enum.EasingStyle.Quint), {
+		Position = position
+	}):Play()
+end
+
+local function formatTime(seconds)
+	local mins = math.floor(seconds / 60)
+	local secs = math.floor(seconds % 60)
+	if mins > 0 then
+		return string.format("%dm %ds", mins, secs)
+	else
+		return string.format("%ds", secs)
+	end
+end
+
+--// SILENT AIM SETTINGS
+local SILENT_AIM_ENABLED = false
+local LOOP_KILL_ACTIVE = false
+local TARGET_PART = "Head"
+local MAX_FOV_RADIUS = isMobile and 80 or 250
+local SHOW_FOV_CIRCLE = true
+local TEAM_CHECK = false
+local WALL_CHECK = false
+
+--// STATES
+local systemActive = false
+local minimized = false
+local scriptRunning = true
+local sessionStart = tick()
+local startingItems = 0
+local itemsCollected = 0
+local easterEggClicks = 0
+local easterEggActivated = false
+local killCount = 0
+
+--// INPUT POSITION TRACKING
+local inputPosition = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+--// FOV CIRCLE
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 1.5
+fovCircle.NumSides = 64
+fovCircle.Radius = MAX_FOV_RADIUS
+fovCircle.Filled = false
+fovCircle.Color = Color3.fromRGB(255, 255, 255)
+fovCircle.Visible = false
+fovCircle.Transparency = 0.7
+
+-- Track input position
+UIS.InputChanged:Connect(function(input, gameProcessed)
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		inputPosition = Vector2.new(input.Position.X, input.Position.Y)
+	elseif input.UserInputType == Enum.UserInputType.Touch then
+		inputPosition = Vector2.new(input.Position.X, input.Position.Y)
+	end
+end)
+
+UIS.InputBegan:Connect(function(input, gameProcessed)
+	if input.UserInputType == Enum.UserInputType.Touch then
+		inputPosition = Vector2.new(input.Position.X, input.Position.Y)
+	end
+end)
+
+-- Update FOV circle
+RunService.RenderStepped:Connect(function()
+	if not isMobile then
+		local mousePos = UIS:GetMouseLocation()
+		inputPosition = Vector2.new(mousePos.X, mousePos.Y)
+	end
+	fovCircle.Position = inputPosition
+	fovCircle.Radius = MAX_FOV_RADIUS
+	fovCircle.Visible = SHOW_FOV_CIRCLE and SILENT_AIM_ENABLED and scriptRunning
+end)
+
+--// SILENT AIM FUNCTIONS
+local function isAlive(plr)
+	local char = plr.Character
+	if not char then return false end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return false end
+	return true
+end
+
+local function isVisible(targetPart)
+	if not WALL_CHECK then return true end
+	local origin = Camera.CFrame.Position
+	local direction = (targetPart.Position - origin)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {player.Character, Camera}
+	local result = workspace:Raycast(origin, direction, rayParams)
+	if result then
+		return result.Instance:IsDescendantOf(targetPart.Parent)
+	end
+	return true
+end
+
+local function isEnemy(plr)
+	if not TEAM_CHECK then return true end
+	if plr.Team == nil or player.Team == nil then return true end
+	return plr.Team ~= player.Team
+end
+
+local function getClosestTarget()
+	local closestPlayer = nil
+	local closestDistance = MAX_FOV_RADIUS
+
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= player and isAlive(plr) and isEnemy(plr) then
+			local char = plr.Character
+			local targetPart = char:FindFirstChild(TARGET_PART) or char:FindFirstChild("HumanoidRootPart")
+			if targetPart then
+				local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+				if onScreen then
+					local dist = (Vector2.new(screenPos.X, screenPos.Y) - inputPosition).Magnitude
+					if dist < closestDistance and isVisible(targetPart) then
+						closestDistance = dist
+						closestPlayer = plr
+					end
+				end
+			end
+		end
+	end
+
+	return closestPlayer
+end
+
+local function fireAtTarget(targetPlayer)
+	local char = targetPlayer.Character
+	if not char then return end
+
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	local rootPart = char:FindFirstChild("HumanoidRootPart")
+	local hitPart = char:FindFirstChild(TARGET_PART) or rootPart
+
+	if not humanoid or not rootPart or not hitPart then return end
+	if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+
+	local isHeadshot = (TARGET_PART == "Head")
+	local distance = (player.Character.HumanoidRootPart.Position - rootPart.Position).Magnitude
+
+	local args = {
+		{
+			YMax = -5, XMax = -2, TacticalReloadAnimationSpeed = 1, CanSpinPart = false,
+			AngleX_Min = 3, Lifesteal = 0, MeleeCriticalDamageEnabled = false, SilenceEffect = false,
+			ExplosionCraterFadeTime = 1, Accuracy = 0.3, GoreSoundVolume = 1, MeleeHitEffectEnabled = true,
+			DropVelocity = 10, CustomMeleeHitEffect = false, WhizDistance = 25, ProjectileMotion = false,
+			HitmarkerFadeTimeHS = 0.4, ReloadAnimationSpeed = 1.35, Gravity = Vector2.new(0, 1000),
+			SpreadRedutionS = 0.6, VisibleTime = 0.01, HoldDownAnimationSpeed = 0.5, ScopeSwaySpeed = 15,
+			HoldingTime = 1, HeatPerFireMax = 8, MeleeBloodEnabled = false, MeleeKnockback = 0,
+			MeleeDamage = 20, EquippedAnimationID = 15100328035, MeleeBloodWoundTexture = {6552016340},
+			EasingStyleNAD = Enum.EasingStyle.Quint, SecondaryShotgunPumpinAnimationSpeed = 1,
+			BulletHoleVisibleTime = 3, AimFireAnimationID = 9335462288, MeleeHitSoundIDs = {6000828622},
+			PreShotgunReload = false, BulletPerBurst = 3, MeleeHitSoundPitchMin = 1, ShotsForDepletion = 12,
+			HitmarkerSoundID = {3748776946, 3748777642, 3748780065}, MarkerEffectEnabled = true,
+			Keyboard = {HoldDown = Enum.KeyCode.E, Melee = Enum.KeyCode.H, Switch = Enum.KeyCode.V,
+				Inspect = Enum.KeyCode.F, ToogleAim = Enum.KeyCode.Q, Reload = Enum.KeyCode.R},
+			DualEnabled = false, RecoilRedution = 0.35, EasingStyle = Enum.EasingStyle.Quint,
+			CrossExpansion = 100, BloodWoundFadeTime = 1, MeleeLifesteal = 0, DisappearTime = 4,
+			ExplosionSoundIDs = {163064102}, BloodWoundPartColor = false, MeleeHitSoundPitchMax = 1.5,
+			ExplosionKnockbackMultiplierOnPlayer = 2, ADSLerpAlpha = 0.25, PenetrationAmount = 0,
+			Velocity = 50, PenetrationType = "HumanoidPenetration", DropXMax = 5, HitmarkerSoundPitchHS = 1,
+			LowAmmo = false, BulletShellRotVelocity = 40, MeleeBloodWoundFadeTime = 1,
+			ADSCFrame = CFrame.new(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1),
+			EasingDirectionNAD = Enum.EasingDirection.Out, MeleeBloodWoundSize = 0.5, LightBrightness = 4,
+			HitmarkerFadeTime = 0.4, SelfKnockbackMultiplier = 2, BulletHoleFadeTime = 1, MaximumTime = 1,
+			ChargingTime = 1, InspectAnimationSpeed = 1, BulletSpeed = 10000, SelfKnockback = false,
+			MeleeHitCharSndPitchMax = 1, CrossScaleIS = 0.6, IronsightEnabled = false,
+			SpreadPattern = {{0, -0.4}, {-0.35, 0.2}, {0.35, 0.2}, {0, 1},
+				{0.95, 0.31}, {0.59, -0.81}, {-0.59, -0.81}, {-0.95, 0.31}},
+			SmokeTrailEnabled = false, MeleeAttackEnabled = false, HeadshotEnabled = true,
+			WalkSpeedRedution = 2, AngleZ_Max = 3, MinigunRevDownAnimationSpeed = 1, FirstPersonArms = true,
+			AimIdleAnimationID = 9335402974, FieldOfViewIS = 50, IdleAnimationSpeed = 1,
+			DelayBeforeFiring = 1, ScopeSwayDamper = 0.65, SpreadRedutionIS = 0.6, TimeBeforeCooldown = 3,
+			MouseSensitiveS = 0.15,
+			Controller = {HoldDown = Enum.KeyCode.DPadUp, Melee = Enum.KeyCode.ButtonR3,
+				Inspect = Enum.KeyCode.DPadDown, Switch = Enum.KeyCode.DPadRight,
+				Fire = Enum.KeyCode.ButtonR1, ToogleAim = Enum.KeyCode.ButtonL1, Reload = Enum.KeyCode.ButtonX},
+			ReloadAnimationID = 15100331521, EquipTime = 0.15, BurstFireEnabled = false, XMin = -4,
+			MarkerPartColor = true, MarkerEffectTexture = {2078626}, FireAnimationID = 15100329459,
+			TweenLengthNAD = 0.8, Drag = 1, MaxCount = 200, CriticalBaseChance = 5, GoreSoundPitchMin = 1,
+			MeleeBloodWoundEnabled = false, GoreEffectEnabled = false, HoldDownAnimationID = 9335486962,
+			OverheatAnimationSpeed = 1, BurstRate = 0.075, ShellTextureID = 94287792,
+			BulletHoleTexture = {2078626}, AimAnimationsEnabled = false, Recoil = 45, MeleeAttackRange = 4,
+			HitCharSndPitchMax = 1, BloodEnabled = false, MaxHeat = 100, FirstPersonArmADS = true,
+			DropYMax = 0, DropYMin = -0.1, DropXMin = -5, AfflictionName = "IgniteScript",
+			BulletShellParticles = true, ShotgunPumpinAnimationSpeed = 1, HitEffectEnabled = false,
+			MeleeHeadshotEnabled = true, WhizSoundEnabled = true, HoldAndReleaseEnabled = false,
+			AngleX_Max = 3, Level1ChargingTime = 1, SelectiveFireEnabled = false,
+			CriticalDamageEnabled = false, AllowCollide = true, SwitchAnimationSpeed = 1,
+			ShotgunEnabled = false, EasingDirection = Enum.EasingDirection.Out, MouseSensitiveIS = 0.2,
+			Knockback = 0, AimSecondaryFireAnimationSpeed = 1, HoldDownEnabled = false,
+			MeleeHitCharSndIDs = {6398015798, 6398016125, 6398016391, 6398016618}, ShotgunPump = true,
+			MaxRotationSpeed = 360, CrossScaleS = 0, MuzzleFlashEnabled = true, OverheatTime = 2.5,
+			Shockwave = true, MeleeCriticalBaseChance = 5, BloodWoundVisibleTime = 10, WhizSoundVolume = 1,
+			ScopeSensitive = 0.2, BulletShellVelocity = 17, MeleeAttackAnimationID = 7913051282,
+			ChargingAnimationSpeed = 1, HitCharSndVolume = 1, MarkerEffectFadeTime = 1,
+			MeleeCriticalDamageMultiplier = 3, MeleeAttackAnimationSpeed = 1, ZeroDamageDistance = 10000,
+			ShotgunClipinAnimationSpeed = 1, ChargedShotEnabled = false, HitCharSndIDs = {3802437696},
+			FullDamageDistance = 1000, CrossDamper = 0.8, ExplosionSoundPitchMax = 1.5, SwitchTime = 0.25,
+			LightColor = Color3.new(1, 1.1098039150238037, 0), AnimationKeyframes = {},
+			WhizSoundPitchMax = 1, GoreSoundIDs = {1930359546},
+			ShellScale = vector.create(4, 4, 5), ShellSize = vector.create(0.2, 0.2, 0.53),
+			MinigunEnabled = false, SpinX = 3, MeleeHitSoundVolume = 1,
+			ChargingSoundPitchRange = {1, 1.5}, MeleeHeadshotDamageMultiplier = 2,
+			CriticalDamageMultiplier = 3, ExplosiveEnabled = false, AimFireAnimationSpeed = 1,
+			Acceleration = vector.zero, MeleeBloodWoundPartColor = true, SelfKnockbackPower = 8,
+			MaxAmmo = 85, FireModeTexts = {"SEMI-AUTO", "2-ROUND-BURST", "3-ROUND-BURST", "AUTO"},
+			AmmoPerMag = 5, ScopeDelay = 0, MaximumRate = 4, InspectAnimationEnabled = false,
+			PartColor = false, HitSoundPitchMax = 1.5, BurstRates = {0, 0.075, 0.075, 0},
+			AutoReload = true, TacticalReloadTime = 3, SecondaryFireAnimationEnabled = false,
+			SecondaryFireAnimationSpeed = 1, ChargingSoundIncreasePitch = true,
+			HitSoundIDs = {186809061, 186809249, 186809250, 186809252}, Ammo = 85,
+			ExplosionKnockback = false, HitSoundVolume = 1, DelayAfterFiring = 1, SniperEnabled = true,
+			RaisePitch = false,
+			BloodWoundTexture = {6552016340, 6222792597, 359667702, 176678487, 3236192667},
+			HitmarkerColorHS = Color3.new(1, 0, 0), MinDepletion = 2, ExplosionRadius = 8,
+			SmokeTrailRateIncrement = 1, MaxDepletion = 4, ShotgunPumpinSpeed = 1.1, BulletPerShot = 8,
+			YMin = -6, MeleeHitCharSndVolume = 1, BulletShellEnabled = true, LightRange = 15,
+			PreShotgunReloadAnimationSpeed = 1, ShotgunPumpinAnimationID = 15100330284, FireRate = 1,
+			TweenLength = 0.8, IdleAnimationID = 15100328801, WalkSpeedRedutionEnabled = true,
+			MeleeBloodWoundTextureColor = Color3.new(1, 0, 0), FullyGibbedLimbChance = 50,
+			BloodWoundTextureColor = Color3.new(1, 0, 0), DropAllRemainingBullets = false, Ejection = true,
+			GoreSoundPitchMax = 1.5, RemoveOldAtMax = false, ShotgunPattern = false, HitCharSndPitchMin = 1,
+			TacticalReloadAnimationEnabled = false, DamageBasedOnDistance = false, PenetrationDepth = 0,
+			MarkerEffectSize = 0.5, ScopeKnockbackDamper = 0.65, PreShotgunReloadSpeed = 0.5,
+			AfflictChance = 100, MeleeAfflictionName = "", ChargingAnimationEnabled = false, Spread = 1,
+			MinigunRevUpAnimationSpeed = 1, AngleZ_Min = -3,
+			WhizSoundID = {3809084884, 3809085250, 3809085650, 3809085996, 3809086455},
+			ShellClipinSpeed = 0.5, ProjectileType = "TestRound", BatteryEnabled = false,
+			Affliction = false, Range = 2000, HeatPerFireMin = 7, CooldownRate = 1,
+			SecondaryShotgunPump = false, ExplosionCraterEnabled = true, ReloadTime = 4,
+			ExplosionCraterVisibleTime = 3, FireRates = {0.125, 0.5, 0.5, 0.1}, HitmarkerEnabled = true,
+			CustomHitEffect = false, ExplosionCraterPartColor = false, MeleeBloodWoundVisibleTime = 3,
+			SpinY = 3, SpinZ = 3, RecoilSpeed = 40, LightShadows = true,
+			HitmarkerColor = Color3.new(1, 1, 1), ExplosionCraterTexture = {53875997}, CooldownTime = 0.05,
+			BulletHoleSize = 0.5, ExplosionKnockbackMultiplierOnTarget = 2, CustomExplosion = false,
+			FriendlyFire = false, MarkerEffectVisibleTime = 3, DamageDropOffEnabled = false,
+			HitmarkerSoundPitch = 1, AngleY_Min = 0, Level2ChargingTime = 2, ScopeKnockbackSpeed = 15,
+			BaseDamage = 55, LerpAlpha = 0.25, ExplosionKnockbackPower = 50,
+			ChargedShotAdvanceEnabled = false, WhizSoundPitchMin = 1, ExplosionCraterSize = 3,
+			ExplosionSoundPitchMin = 1, MeleeAfflictChance = 100, ExplosionSoundEnabled = true,
+			LimitedAmmoEnabled = false, SecondaryShotgunPumpinSpeed = 0.5, RecoilDamper = 0.2,
+			FireAnimationSpeed = 1, AngleY_Max = 0, ScopeKnockbackMultiplier = 5,
+			EquippedAnimationSpeed = 1, ShotgunReload = false, AimIdleAnimationSpeed = 1,
+			ReduceSelfDamageOnAirOnly = false, CameraRecoilingEnabled = false, BloodWoundSize = 0.5,
+			MuzzleLightEnabled = true, FieldOfViewS = 12.5, ChargeAlterTable = {},
+			AdvancedChargingTime = 5, MagCartridge = false, AimChargingAnimationSpeed = 1,
+			ExplosionSoundVolume = 1, BloodWoundEnabled = false, HeadshotDamageMultiplier = 2,
+			MeleeHitCharSndPitchMin = 1, FireModes = {1, 2, 3, true}, SelfDamage = false,
+			HitSoundPitchMin = 1, Auto = false, BulletShellDelay = 0, SelfKnockbackRedution = 0.8,
+			ShellMeshID = 94295100, MeleeAffliction = false, EchoEffect = true, BulletHoleEnabled = false,
+			SelfDamageRedution = 0.5, CrossSize = 7, CrossSpeed = 15
+		},
+		player:WaitForChild("Backpack"):FindFirstChild("M40") or (player.Character and player.Character:FindFirstChild("M40")),
+		player,
+		humanoid,
+		hitPart,
+		{55, 2, isHeadshot, distance, false, 10000, 1000, false},
+		{0, 0, false, "IgniteScript", 100},
+		{false, 5, 3},
+		hitPart,
+		{
+			false, {1930359546}, 1, 1.5, 1,
+			ReplicatedStorage:WaitForChild("Miscs"):WaitForChild("GunVisualEffects"):WaitForChild("M40"):WaitForChild("GoreEffect"),
+			50
+		}
+	}
+
+	local remote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("runThereJungle")
+	remote:InvokeServer(unpack(args))
+end
+
+--// GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "SovietHub"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = player:WaitForChild("PlayerGui")
+
+--// NOTIFICATION SYSTEM
+local notifContainer = Instance.new("Frame")
+notifContainer.Name = "NotifContainer"
+notifContainer.Parent = gui
+notifContainer.BackgroundTransparency = 1
+notifContainer.Position = UDim2.new(1, -290, 0, 20)
+notifContainer.Size = UDim2.new(0, 270, 1, -40)
+
+local notifLayout = Instance.new("UIListLayout")
+notifLayout.Parent = notifContainer
+notifLayout.Padding = UDim.new(0, 6)
+notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
+notifLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+
+local notifCount = 0
+
+local function notify(title, message, duration, notifType)
+	if not scriptRunning then return end
+
+	duration = duration or 3
+	notifType = notifType or "info"
+	notifCount = notifCount + 1
+
+	local accentColor = Theme.Gold
+	local iconText = "★"
+	if notifType == "success" then
+		accentColor = Theme.Green
+		iconText = "✓"
+	elseif notifType == "error" then
+		accentColor = Theme.Red
+		iconText = "✗"
+	elseif notifType == "warning" then
+		accentColor = Theme.Gold
+		iconText = "!"
+	elseif notifType == "easter" then
+		accentColor = Color3.fromRGB(255, 100, 255)
+		iconText = "❤"
+	end
+
+	local notif = Instance.new("Frame")
+	notif.Name = "Notif_" .. notifCount
+	notif.Parent = notifContainer
+	notif.BackgroundColor3 = Theme.Background
+	notif.Size = UDim2.new(0, 260, 0, 60)
+	notif.LayoutOrder = notifCount
+	notif.ClipsDescendants = true
+	createCorner(notif, 8)
+	createStroke(notif, Theme.Gold, 1.5)
+
+	local accent = Instance.new("Frame")
+	accent.Parent = notif
+	accent.BackgroundColor3 = accentColor
+	accent.Size = UDim2.new(0, 3, 1, 0)
+	accent.BorderSizePixel = 0
+
+	local icon = Instance.new("TextLabel")
+	icon.Parent = notif
+	icon.BackgroundTransparency = 1
+	icon.Position = UDim2.new(0, 10, 0, 8)
+	icon.Size = UDim2.new(0, 24, 0, 24)
+	icon.Font = Enum.Font.GothamBold
+	icon.Text = iconText
+	icon.TextColor3 = accentColor
+	icon.TextSize = 16
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Parent = notif
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Position = UDim2.new(0, 38, 0, 8)
+	titleLabel.Size = UDim2.new(1, -45, 0, 16)
+	titleLabel.Font = Enum.Font.GothamBold
+	titleLabel.Text = title or "Soviet Hub"
+	titleLabel.TextColor3 = Theme.Text
+	titleLabel.TextSize = 12
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+	local msgLabel = Instance.new("TextLabel")
+	msgLabel.Parent = notif
+	msgLabel.BackgroundTransparency = 1
+	msgLabel.Position = UDim2.new(0, 38, 0, 26)
+	msgLabel.Size = UDim2.new(1, -45, 0, 20)
+	msgLabel.Font = Enum.Font.Gotham
+	msgLabel.Text = message or ""
+	msgLabel.TextColor3 = Theme.TextDim
+	msgLabel.TextSize = 11
+	msgLabel.TextXAlignment = Enum.TextXAlignment.Left
+	msgLabel.TextWrapped = true
+
+	local progressBar = Instance.new("Frame")
+	progressBar.Parent = notif
+	progressBar.BackgroundColor3 = accentColor
+	progressBar.Position = UDim2.new(0, 0, 1, -2)
+	progressBar.Size = UDim2.new(1, 0, 0, 2)
+	progressBar.BorderSizePixel = 0
+
+	if notifType == "easter" then
+		spawn(function()
+			local idx = 1
+			while notif and notif.Parent do
+				local color = Theme.Rainbow[idx]
+				tweenColor(accent, "BackgroundColor3", color, 0.2)
+				tweenColor(icon, "TextColor3", color, 0.2)
+				tweenColor(progressBar, "BackgroundColor3", color, 0.2)
+				idx = idx % #Theme.Rainbow + 1
+				wait(0.2)
+			end
+		end)
+	end
+
+	notif.Position = UDim2.new(1, 30, 0, 0)
+	tweenPosition(notif, UDim2.new(0, 0, 0, 0), 0.25)
+
+	TweenService:Create(progressBar, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
+		Size = UDim2.new(0, 0, 0, 2)
+	}):Play()
+
+	spawn(function()
+		wait(duration)
+		if notif and notif.Parent then
+			tweenPosition(notif, UDim2.new(1, 30, 0, 0), 0.2)
+			wait(0.2)
+			if notif and notif.Parent then notif:Destroy() end
+		end
+	end)
+
+	local clickBtn = Instance.new("TextButton")
+	clickBtn.Parent = notif
+	clickBtn.BackgroundTransparency = 1
+	clickBtn.Size = UDim2.new(1, 0, 1, 0)
+	clickBtn.Text = ""
+	clickBtn.ZIndex = 10
+	clickBtn.MouseButton1Click:Connect(function()
+		tweenPosition(notif, UDim2.new(1, 30, 0, 0), 0.15)
+		wait(0.15)
+		if notif and notif.Parent then notif:Destroy() end
+	end)
+end
+
+--// MODE SELECTOR
+if player.Name == specialUser then
+	local selectGui = Instance.new("ScreenGui")
+	selectGui.Name = "ModeSelector"
+	selectGui.Parent = player.PlayerGui
+
+	local backdrop = Instance.new("Frame")
+	backdrop.Parent = selectGui
+	backdrop.Size = UDim2.new(1, 0, 1, 0)
+	backdrop.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	backdrop.BackgroundTransparency = 0.5
+	backdrop.BorderSizePixel = 0
+	backdrop.ZIndex = 1
+
+	local frame = Instance.new("Frame")
+	frame.Parent = selectGui
+	frame.Size = UDim2.new(0, 260, 0, 180)
+	frame.Position = UDim2.new(0.5, -130, 0.5, -90)
+	frame.BackgroundColor3 = Theme.Background
+	frame.BorderSizePixel = 0
+	frame.ZIndex = 2
+	createCorner(frame, 12)
+	createStroke(frame, Theme.Gold, 2)
+
+	local selectorHeader = Instance.new("Frame")
+	selectorHeader.Parent = frame
+	selectorHeader.Size = UDim2.new(1, 0, 0, 45)
+	selectorHeader.BackgroundColor3 = Theme.Header
+	selectorHeader.ZIndex = 3
+	createCorner(selectorHeader, 12)
+
+	local headerFixS = Instance.new("Frame")
+	headerFixS.Parent = selectorHeader
+	headerFixS.BackgroundColor3 = Theme.Header
+	headerFixS.Position = UDim2.new(0, 0, 1, -8)
+	headerFixS.Size = UDim2.new(1, 0, 0, 8)
+	headerFixS.BorderSizePixel = 0
+	headerFixS.ZIndex = 3
+
+	local goldLineS = Instance.new("Frame")
+	goldLineS.Parent = selectorHeader
+	goldLineS.BackgroundColor3 = Theme.Gold
+	goldLineS.Position = UDim2.new(0, 0, 1, -2)
+	goldLineS.Size = UDim2.new(1, 0, 0, 2)
+	goldLineS.BorderSizePixel = 0
+	goldLineS.ZIndex = 4
+
+	local starIconS = Instance.new("ImageLabel")
+	starIconS.Parent = selectorHeader
+	starIconS.BackgroundTransparency = 1
+	starIconS.Position = UDim2.new(0, 10, 0.5, -10)
+	starIconS.Size = UDim2.new(0, 20, 0, 20)
+	starIconS.Image = "rbxassetid://81424212403741"
+	starIconS.ImageColor3 = Theme.Gold
+	starIconS.ZIndex = 4
+
+	local selectorTitle = Instance.new("TextLabel")
+	selectorTitle.Parent = selectorHeader
+	selectorTitle.Size = UDim2.new(1, 0, 1, 0)
+	selectorTitle.BackgroundTransparency = 1
+	selectorTitle.Text = "SELECT MODE"
+	selectorTitle.TextColor3 = Theme.Text
+	selectorTitle.Font = Enum.Font.GothamBlack
+	selectorTitle.TextSize = 16
+	selectorTitle.ZIndex = 4
+
+	local pcBtn = Instance.new("TextButton")
+	pcBtn.Parent = frame
+	pcBtn.Size = UDim2.new(0.44, 0, 0, 55)
+	pcBtn.Position = UDim2.new(0.05, 0, 0, 55)
+	pcBtn.Text = "💻 PC"
+	pcBtn.Font = Enum.Font.GothamBold
+	pcBtn.TextSize = 14
+	pcBtn.TextColor3 = Theme.Text
+	pcBtn.BackgroundColor3 = Theme.Panel
+	pcBtn.AutoButtonColor = false
+	pcBtn.ZIndex = 3
+	createCorner(pcBtn, 8)
+	createStroke(pcBtn, Theme.Gold, 1)
+
+	local mobileBtn = Instance.new("TextButton")
+	mobileBtn.Parent = frame
+	mobileBtn.Size = UDim2.new(0.44, 0, 0, 55)
+	mobileBtn.Position = UDim2.new(0.51, 0, 0, 55)
+	mobileBtn.Text = "📱 MOBILE"
+	mobileBtn.Font = Enum.Font.GothamBold
+	mobileBtn.TextSize = 14
+	mobileBtn.TextColor3 = Theme.Text
+	mobileBtn.BackgroundColor3 = Theme.Panel
+	mobileBtn.AutoButtonColor = false
+	mobileBtn.ZIndex = 3
+	createCorner(mobileBtn, 8)
+	createStroke(mobileBtn, Theme.Gold, 1)
+
+	local info = Instance.new("TextLabel")
+	info.Parent = frame
+	info.BackgroundTransparency = 1
+	info.Position = UDim2.new(0, 10, 0, 120)
+	info.Size = UDim2.new(1, -20, 0, 50)
+	info.Font = Enum.Font.Gotham
+	info.Text = "PC: Click buttons | Mobile: Tap buttons"
+	info.TextColor3 = Theme.TextDim
+	info.TextSize = 10
+	info.TextWrapped = true
+	info.ZIndex = 3
+
+	pcBtn.MouseEnter:Connect(function() tweenColor(pcBtn, "BackgroundColor3", Theme.Header, 0.15) end)
+	pcBtn.MouseLeave:Connect(function() tweenColor(pcBtn, "BackgroundColor3", Theme.Panel, 0.15) end)
+	mobileBtn.MouseEnter:Connect(function() tweenColor(mobileBtn, "BackgroundColor3", Theme.Header, 0.15) end)
+	mobileBtn.MouseLeave:Connect(function() tweenColor(mobileBtn, "BackgroundColor3", Theme.Panel, 0.15) end)
+
+	frame.Size = UDim2.new(0, 0, 0, 0)
+	frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	backdrop.BackgroundTransparency = 1
+
+	TweenService:Create(backdrop, TweenInfo.new(0.2), {BackgroundTransparency = 0.5}):Play()
+	TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Size = UDim2.new(0, 260, 0, 180),
+		Position = UDim2.new(0.5, -130, 0.5, -90)
+	}):Play()
+
+	local function closeSelector(mobile)
+		isMobile = mobile
+		modeChosen = true
+		MAX_FOV_RADIUS = isMobile and 80 or 250
+		TweenService:Create(frame, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+			Size = UDim2.new(0, 0, 0, 0),
+			Position = UDim2.new(0.5, 0, 0.5, 0)
+		}):Play()
+		TweenService:Create(backdrop, TweenInfo.new(0.2), {BackgroundTransparency = 1}):Play()
+		wait(0.2)
+		selectGui:Destroy()
+	end
+
+	pcBtn.MouseButton1Click:Connect(function() closeSelector(false) end)
+	mobileBtn.MouseButton1Click:Connect(function() closeSelector(true) end)
+
+	repeat task.wait() until modeChosen
+end
+
+--// UI SETTINGS
+local UI_WIDTH = isMobile and 260 or 300
+local UI_HEIGHT = isMobile and 280 or 290
+local BUTTON_HEIGHT = isMobile and 38 or 42
+
+--// MAIN FRAME
+local main = Instance.new("Frame")
+main.Parent = gui
+main.Size = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT)
+main.Position = UDim2.new(0.5, -UI_WIDTH/2, 0.65, -UI_HEIGHT/2)
+main.BackgroundColor3 = Theme.Background
+main.BorderSizePixel = 0
+main.Active = true
+main.ClipsDescendants = true
+createCorner(main, 10)
+
+local mainStroke = createStroke(main, Theme.Gold, 2)
+
+--// HEADER
+local header = Instance.new("Frame")
+header.Parent = main
+header.Size = UDim2.new(1, 0, 0, 42)
+header.BackgroundColor3 = Theme.Header
+header.BorderSizePixel = 0
+header.Active = true
+header.ZIndex = 2
+createCorner(header, 10)
+
+local headerFix = Instance.new("Frame")
+headerFix.Parent = header
+headerFix.BackgroundColor3 = Theme.Header
+headerFix.Position = UDim2.new(0, 0, 1, -8)
+headerFix.Size = UDim2.new(1, 0, 0, 8)
+headerFix.BorderSizePixel = 0
+headerFix.ZIndex = 2
+
+local goldAccent = Instance.new("Frame")
+goldAccent.Parent = header
+goldAccent.BackgroundColor3 = Theme.Gold
+goldAccent.Position = UDim2.new(0, 0, 1, -2)
+goldAccent.Size = UDim2.new(1, 0, 0, 2)
+goldAccent.BorderSizePixel = 0
+goldAccent.ZIndex = 3
+
+local starIcon = Instance.new("ImageLabel")
+starIcon.Parent = header
+starIcon.BackgroundTransparency = 1
+starIcon.Image = "rbxassetid://81424212403741"
+starIcon.Size = UDim2.new(0, 22, 0, 22)
+starIcon.Position = UDim2.new(0, 10, 0.5, -11)
+starIcon.ImageColor3 = Theme.Gold
+starIcon.ZIndex = 3
+
+local title = Instance.new("TextLabel")
+title.Parent = header
+title.Size = UDim2.new(1, -100, 1, 0)
+title.Position = UDim2.new(0, 36, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "SOVIET HUB"
+title.TextColor3 = Theme.Text
+title.Font = Enum.Font.GothamBlack
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.TextSize = 16
+title.ZIndex = 3
+
+local minimize = Instance.new("TextButton")
+minimize.Parent = header
+minimize.Size = UDim2.new(0, 30, 0, 30)
+minimize.Position = UDim2.new(1, -68, 0.5, -15)
+minimize.Text = "-"
+minimize.BackgroundColor3 = Theme.HeaderDark
+minimize.Font = Enum.Font.GothamBlack
+minimize.TextColor3 = Theme.Text
+minimize.TextSize = 18
+minimize.AutoButtonColor = false
+minimize.ZIndex = 4
+createCorner(minimize, 6)
+
+minimize.MouseEnter:Connect(function() tweenColor(minimize, "BackgroundColor3", Theme.Panel, 0.1) end)
+minimize.MouseLeave:Connect(function() tweenColor(minimize, "BackgroundColor3", Theme.HeaderDark, 0.1) end)
+
+local deleteBtn = Instance.new("TextButton")
+deleteBtn.Parent = header
+deleteBtn.Size = UDim2.new(0, 30, 0, 30)
+deleteBtn.Position = UDim2.new(1, -35, 0.5, -15)
+deleteBtn.Text = "X"
+deleteBtn.BackgroundColor3 = Theme.Red
+deleteBtn.Font = Enum.Font.GothamBlack
+deleteBtn.TextColor3 = Theme.Text
+deleteBtn.TextSize = 14
+deleteBtn.AutoButtonColor = false
+deleteBtn.ZIndex = 4
+createCorner(deleteBtn, 6)
+
+deleteBtn.MouseEnter:Connect(function() tweenColor(deleteBtn, "BackgroundColor3", Theme.RedLight, 0.1) end)
+deleteBtn.MouseLeave:Connect(function() tweenColor(deleteBtn, "BackgroundColor3", Theme.Red, 0.1) end)
+
+deleteBtn.MouseButton1Click:Connect(function()
+	notify("Soviet Hub", "Goodbye, Comrade!", 1, "info")
+	SILENT_AIM_ENABLED = false
+	LOOP_KILL_ACTIVE = false
+	scriptRunning = false
+	fovCircle.Visible = false
+	fovCircle:Remove()
+	wait(0.2)
+	TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
+		Size = UDim2.new(0, 0, 0, 0),
+		Position = UDim2.new(main.Position.X.Scale, main.Position.X.Offset + UI_WIDTH/2, main.Position.Y.Scale, main.Position.Y.Offset + UI_HEIGHT/2)
+	}):Play()
+	wait(0.25)
+	gui:Destroy()
+end)
+
+--// CONTENT
+local content = Instance.new("Frame")
+content.Parent = main
+content.Name = "Content"
+content.Position = UDim2.new(0, 0, 0, 44)
+content.Size = UDim2.new(1, 0, 1, -44)
+content.BackgroundTransparency = 1
+content.ClipsDescendants = true
+content.ZIndex = 1
+
+--// STATUS PANEL
+local topPanel = Instance.new("Frame")
+topPanel.Parent = content
+topPanel.Position = UDim2.new(0.5, 0, 0, 8)
+topPanel.Size = UDim2.new(0, UI_WIDTH - 20, 0, 50)
+topPanel.AnchorPoint = Vector2.new(0.5, 0)
+topPanel.BackgroundColor3 = Theme.Panel
+topPanel.ZIndex = 2
+createCorner(topPanel, 8)
+createStroke(topPanel, Theme.Gold, 1)
+
+local killTitle = Instance.new("TextLabel")
+killTitle.Parent = topPanel
+killTitle.Position = UDim2.new(0, 12, 0, 6)
+killTitle.Size = UDim2.new(0.5, -15, 0, 14)
+killTitle.BackgroundTransparency = 1
+killTitle.Text = "KILLS"
+killTitle.TextColor3 = Theme.TextDim
+killTitle.Font = Enum.Font.GothamBold
+killTitle.TextSize = 10
+killTitle.TextXAlignment = Enum.TextXAlignment.Left
+killTitle.ZIndex = 3
+
+local killCountLabel = Instance.new("TextLabel")
+killCountLabel.Parent = topPanel
+killCountLabel.Position = UDim2.new(0, 12, 0, 20)
+killCountLabel.Size = UDim2.new(0.5, -15, 0, 26)
+killCountLabel.BackgroundTransparency = 1
+killCountLabel.Text = "0"
+killCountLabel.TextColor3 = Theme.Gold
+killCountLabel.Font = Enum.Font.GothamBlack
+killCountLabel.TextSize = 22
+killCountLabel.TextXAlignment = Enum.TextXAlignment.Left
+killCountLabel.ZIndex = 3
+
+local dividerPanel = Instance.new("Frame")
+dividerPanel.Parent = topPanel
+dividerPanel.Position = UDim2.new(0.5, 0, 0.15, 0)
+dividerPanel.Size = UDim2.new(0, 1, 0.7, 0)
+dividerPanel.BackgroundColor3 = Theme.Gold
+dividerPanel.BackgroundTransparency = 0.5
+dividerPanel.BorderSizePixel = 0
+dividerPanel.ZIndex = 3
+
+local statusDot = Instance.new("Frame")
+statusDot.Parent = topPanel
+statusDot.BackgroundColor3 = Theme.Red
+statusDot.Position = UDim2.new(0.5, 12, 0.5, -5)
+statusDot.Size = UDim2.new(0, 10, 0, 10)
+statusDot.ZIndex = 3
+createCorner(statusDot, 5)
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = topPanel
+statusLabel.Position = UDim2.new(0.5, 28, 0, 0)
+statusLabel.Size = UDim2.new(0.5, -35, 1, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Theme.Red
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 12
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Text = "OFF"
+statusLabel.ZIndex = 3
+
+--// STATS ROW
+local statsLabel = Instance.new("TextLabel")
+statsLabel.Parent = content
+statsLabel.Position = UDim2.new(0.5, 0, 0, 65)
+statsLabel.Size = UDim2.new(0, UI_WIDTH - 20, 0, 18)
+statsLabel.AnchorPoint = Vector2.new(0.5, 0)
+statsLabel.BackgroundTransparency = 1
+statsLabel.Text = "Runtime: 0s | FOV: " .. MAX_FOV_RADIUS
+statsLabel.TextColor3 = Theme.TextDim
+statsLabel.Font = Enum.Font.Gotham
+statsLabel.TextSize = 10
+statsLabel.ZIndex = 2
+
+--// BUTTON CREATION HELPER
+local function createActionButton(text, color, colorDark, yOffset)
+	local btn = Instance.new("TextButton")
+	btn.Parent = content
+	btn.Position = UDim2.new(0.5, 0, 0, yOffset)
+	btn.Size = UDim2.new(0, UI_WIDTH - 20, 0, BUTTON_HEIGHT)
+	btn.AnchorPoint = Vector2.new(0.5, 0)
+	btn.BackgroundColor3 = color
+	btn.TextColor3 = Color3.fromRGB(15, 5, 5)
+	btn.Font = Enum.Font.GothamBlack
+	btn.TextSize = 14
+	btn.Text = text
+	btn.AutoButtonColor = false
+	btn.ZIndex = 2
+	createCorner(btn, 8)
+	createStroke(btn, colorDark, 1.5)
+
+	btn.MouseEnter:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.new(
+			math.min(color.R + 0.1, 1), math.min(color.G + 0.1, 1), math.min(color.B + 0.1, 1)
+		)}):Play()
+	end)
+	btn.MouseLeave:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.1), {BackgroundColor3 = color}):Play()
+	end)
+	btn.MouseButton1Down:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.08), {
+			Size = UDim2.new(0, UI_WIDTH - 26, 0, BUTTON_HEIGHT - 4)
+		}):Play()
+	end)
+	btn.MouseButton1Up:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.15, Enum.EasingStyle.Back), {
+			Size = UDim2.new(0, UI_WIDTH - 20, 0, BUTTON_HEIGHT)
+		}):Play()
+	end)
+
+	return btn
+end
+
+--// 3 BUTTONS
+local normalBtn = createActionButton("🎯 NORMAL FIRE", Theme.Gold, Theme.GoldDark, 90)
+local loopBtn = createActionButton("🔄 LOOP KILL", Theme.Orange, Theme.OrangeDark, 90 + BUTTON_HEIGHT + 6)
+local onoffBtn = createActionButton("⚡ SILENT AIM: OFF", Theme.Red, Color3.fromRGB(160, 50, 50), 90 + (BUTTON_HEIGHT + 6) * 2)
+
+--// UPDATE STATUS DISPLAY
+local function updateStatusDisplay()
+	if SILENT_AIM_ENABLED then
+		statusLabel.TextColor3 = Theme.Green
+		statusLabel.Text = LOOP_KILL_ACTIVE and "LOOPING" or "ON"
+		tweenColor(statusDot, "BackgroundColor3", LOOP_KILL_ACTIVE and Theme.Orange or Theme.Green, 0.2)
+		onoffBtn.Text = "⚡ SILENT AIM: ON"
+		TweenService:Create(onoffBtn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Green}):Play()
+	else
+		statusLabel.TextColor3 = Theme.Red
+		statusLabel.Text = "OFF"
+		tweenColor(statusDot, "BackgroundColor3", Theme.Red, 0.2)
+		onoffBtn.Text = "⚡ SILENT AIM: OFF"
+		TweenService:Create(onoffBtn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Red}):Play()
+	end
+
+	if LOOP_KILL_ACTIVE then
+		loopBtn.Text = "🔄 LOOP KILL: ON"
+		TweenService:Create(loopBtn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Green}):Play()
+	else
+		loopBtn.Text = "🔄 LOOP KILL"
+		TweenService:Create(loopBtn, TweenInfo.new(0.2), {BackgroundColor3 = Theme.Orange}):Play()
+	end
+end
+
+--// NORMAL FIRE BUTTON
+normalBtn.MouseButton1Click:Connect(function()
+	if not SILENT_AIM_ENABLED then
+		notify("Silent Aim", "Turn ON silent aim first!", 2, "error")
+		return
+	end
+
+	local target = getClosestTarget()
+	if target then
+		fireAtTarget(target)
+		killCount = killCount + 1
+		killCountLabel.Text = tostring(killCount)
+		notify("Silent Aim", "Fired at " .. target.Name, 1.5, "success")
+
+		-- Flash the kill counter
+		TweenService:Create(killCountLabel, TweenInfo.new(0.08), {TextColor3 = Theme.Text}):Play()
+		wait(0.08)
+		TweenService:Create(killCountLabel, TweenInfo.new(0.15), {TextColor3 = Theme.Gold}):Play()
+	else
+		notify("Silent Aim", "No target in FOV!", 1.5, "warning")
+	end
+end)
+
+--// LOOP KILL BUTTON
+loopBtn.MouseButton1Click:Connect(function()
+	if not SILENT_AIM_ENABLED then
+		notify("Silent Aim", "Turn ON silent aim first!", 2, "error")
+		return
+	end
+
+	LOOP_KILL_ACTIVE = not LOOP_KILL_ACTIVE
+	updateStatusDisplay()
+
+	if LOOP_KILL_ACTIVE then
+		notify("Loop Kill", "Loop kill ACTIVATED!", 2, "success")
+	else
+		notify("Loop Kill", "Loop kill STOPPED", 2, "error")
+	end
+end)
+
+--// ON/OFF BUTTON
+onoffBtn.MouseButton1Click:Connect(function()
+	SILENT_AIM_ENABLED = not SILENT_AIM_ENABLED
+
+	if not SILENT_AIM_ENABLED then
+		LOOP_KILL_ACTIVE = false
+	end
+
+	updateStatusDisplay()
+
+	if SILENT_AIM_ENABLED then
+		notify("Silent Aim", "Silent aim ENABLED!", 2, "success")
+	else
+		notify("Silent Aim", "Silent aim DISABLED", 2, "error")
+	end
+end)
+
+--// LOOP KILL COROUTINE
+spawn(function()
+	while scriptRunning do
+		if SILENT_AIM_ENABLED and LOOP_KILL_ACTIVE then
+			local target = getClosestTarget()
+			if target then
+				fireAtTarget(target)
+				killCount = killCount + 1
+				killCountLabel.Text = tostring(killCount)
+
+				-- Flash counter
+				spawn(function()
+					TweenService:Create(killCountLabel, TweenInfo.new(0.05), {TextColor3 = Theme.Text}):Play()
+					wait(0.05)
+					TweenService:Create(killCountLabel, TweenInfo.new(0.1), {TextColor3 = Theme.Gold}):Play()
+				end)
+			end
+			wait(0.3) -- Fire rate for loop kill
+		else
+			wait(0.1)
+		end
+	end
+end)
+
+--// CREDITS (EASTER EGG)
+local credits = Instance.new("TextButton")
+credits.Parent = content
+credits.Position = UDim2.new(0.5, 0, 1, -18)
+credits.Size = UDim2.new(1, 0, 0, 16)
+credits.AnchorPoint = Vector2.new(0.5, 0)
+credits.BackgroundTransparency = 1
+credits.Text = "Soviet Hub v2.1"
+credits.TextColor3 = Theme.TextDim
+credits.Font = Enum.Font.Gotham
+credits.TextSize = 9
+credits.ZIndex = 2
+credits.AutoButtonColor = false
+
+credits.MouseEnter:Connect(function()
+	if not easterEggActivated then
+		TweenService:Create(credits, TweenInfo.new(0.15), {TextColor3 = Theme.Gold}):Play()
+	end
+end)
+
+credits.MouseLeave:Connect(function()
+	if not easterEggActivated then
+		TweenService:Create(credits, TweenInfo.new(0.15), {TextColor3 = Theme.TextDim}):Play()
+	end
+end)
+
+credits.MouseButton1Click:Connect(function()
+	easterEggClicks = easterEggClicks + 1
+
+	TweenService:Create(credits, TweenInfo.new(0.05), {TextSize = 11}):Play()
+	wait(0.05)
+	TweenService:Create(credits, TweenInfo.new(0.08), {TextSize = 9}):Play()
+
+	if easterEggClicks >= 3 and not easterEggActivated then
+		easterEggActivated = true
+		notify("❤ Credits", "Made by man_idk312 (mr_pekob alt)", 5, "easter")
+
+		spawn(function()
+			local idx = 1
+			while credits and credits.Parent and easterEggActivated do
+				TweenService:Create(credits, TweenInfo.new(0.2), {TextColor3 = Theme.Rainbow[idx]}):Play()
+				idx = idx % #Theme.Rainbow + 1
+				wait(0.2)
+			end
+		end)
+
+		credits.Text = "♪ Soviet Hub v2.1 ♪"
+		credits.Font = Enum.Font.GothamBold
+
+		spawn(function()
+			local rot = 0
+			while starIcon and starIcon.Parent and easterEggActivated do
+				rot = rot + 5
+				starIcon.Rotation = rot
+				wait(0.02)
+			end
+		end)
+
+		spawn(function()
+			local idx = 1
+			while goldAccent and goldAccent.Parent and easterEggActivated do
+				local color = Theme.Rainbow[idx]
+				TweenService:Create(goldAccent, TweenInfo.new(0.2), {BackgroundColor3 = color}):Play()
+				TweenService:Create(mainStroke, TweenInfo.new(0.2), {Color = color}):Play()
+				idx = idx % #Theme.Rainbow + 1
+				wait(0.2)
+			end
+		end)
+	elseif easterEggClicks < 3 then
+		local remaining = 3 - easterEggClicks
+		if remaining == 2 then
+			notify("Soviet Hub", "Keep clicking...", 1, "info")
+		elseif remaining == 1 then
+			notify("Soviet Hub", "One more...", 1, "info")
+		end
+	end
+end)
+
+--// MINIMIZE
+local expandedSize = UDim2.new(0, UI_WIDTH, 0, UI_HEIGHT)
+local minimizedSize = UDim2.new(0, UI_WIDTH, 0, 42)
+
+minimize.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	if minimized then
+		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {Size = minimizedSize}):Play()
+		minimize.Text = "+"
+	else
+		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quint), {Size = expandedSize}):Play()
+		minimize.Text = "-"
+	end
+end)
+
+--// DRAG
+local dragging, dragStart, startPos = false, nil, nil
+
+header.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = main.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then dragging = false end
+		end)
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local delta = input.Position - dragStart
+		main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
+end)
+
+--// PULSE ANIMATION
+spawn(function()
+	while scriptRunning do
+		if SILENT_AIM_ENABLED and statusDot and statusDot.Parent then
+			TweenService:Create(statusDot, TweenInfo.new(0.4, Enum.EasingStyle.Sine), {
+				Size = UDim2.new(0, 12, 0, 12),
+				Position = UDim2.new(0.5, 11, 0.5, -6)
+			}):Play()
+			wait(0.4)
+			if not SILENT_AIM_ENABLED then continue end
+			TweenService:Create(statusDot, TweenInfo.new(0.4, Enum.EasingStyle.Sine), {
+				Size = UDim2.new(0, 10, 0, 10),
+				Position = UDim2.new(0.5, 12, 0.5, -5)
+			}):Play()
+			wait(0.4)
+		else
+			wait(0.2)
+		end
+	end
+end)
+
+--// STATS UPDATE LOOP
+spawn(function()
+	while scriptRunning do
+		local runtime = formatTime(tick() - sessionStart)
+		statsLabel.Text = string.format("Runtime: %s | FOV: %d | Kills: %d", runtime, MAX_FOV_RADIUS, killCount)
+		wait(1)
+	end
+end)
+
+--// ENTRANCE ANIMATION
+main.Size = UDim2.new(0, 0, 0, 0)
+main.Position = UDim2.new(0.5, 0, 0.65, 0)
+
+wait(0.1)
+
+TweenService:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+	Size = expandedSize,
+	Position = UDim2.new(0.5, -UI_WIDTH/2, 0.65, -UI_HEIGHT/2)
+}):Play()
+
+wait(0.4)
+
+updateStatusDisplay()
+
+if isMobile then
+	notify("Soviet Hub", "M40 Silent Aim loaded! Tap buttons", 3, "info")
+else
+	notify("Soviet Hub", "M40 Silent Aim loaded! Use buttons", 3, "info")
+end
+
+print("[Soviet Hub v2.1] Silent Aim loaded!")
+print("[Soviet Hub] 3 Buttons: Normal Fire | Loop Kill | On/Off")
+print("[Soviet Hub] " .. (isMobile and "MOBILE" or "PC") .. " mode | FOV: " .. MAX_FOV_RADIUS)
